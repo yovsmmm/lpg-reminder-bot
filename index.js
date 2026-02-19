@@ -54,7 +54,10 @@ function addWorkingDays(days) {
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    "🤖 Сервіс-бот LPG\nОберіть дію:",
+    "🤖 Сервіс-бот LPG\n\n" +
+    "Бот для контролю заміни фільтра LPG.\n" +
+    "Нагадує у робочі дні та веде журнал обслуговування обладнання.\n\n" +
+    "Оберіть дію:",
     {
       reply_markup: {
         inline_keyboard: [
