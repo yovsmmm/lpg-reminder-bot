@@ -1,107 +1,152 @@
 const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+const http = require('http');
 
+// ===== HTTP server (щоб Render не засинав) =====
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Bot is running');
+}).listen(PORT);
+
+// ===== Telegram Bot =====
 const token = process.env.BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
-let reminders = {};
+const DATA_FILE = 'data.json';
 
-// Додаємо робочі дні (Вт–Сб)
+// ===== Data =====
+let data = {
+  reminders: {},   // chatId -> reminder
+  history: {}      // chatId -> array
+};
+
+// Load data
+if (fs.existsSync(DATA_FILE)) {
+  try {
+    data = JSON.parse(fs.readFileSync(DATA_FILE));
+  } catch (e) {
+    console.error('Failed to load data.json');
+  }
+}
+
+// Save data
+function saveData() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+// ===== Utils =====
 function addWorkingDays(days) {
   let date = new Date();
   let added = 0;
 
   while (added < days) {
     date.setDate(date.getDate() + 1);
-    let day = date.getDay(); // 0=Нд, 1=Пн, 2=Вт ... 6=Сб
-
-    if (day >= 2 && day <= 6) {
-      added++;
-    }
+    const d = date.getDay(); // 0=Нд,1=Пн,2=Вт...
+    if (d >= 2 && d <= 6) added++;
   }
 
-  date.setHours(10, 0, 0, 0); // 10:00
-
+  date.setHours(10, 0, 0, 0);
   return date.getTime();
 }
 
-// Головне меню з кнопками
+// ===== /start =====
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    "🤖 Нагадування заміни фільтра LPG\n\nОберіть інтервал:",
+    "🤖 Сервіс-бот LPG\nОберіть дію:",
     {
       reply_markup: {
         inline_keyboard: [
           [{ text: "Через 3 робочі дні", callback_data: "set_3" }],
           [{ text: "Через 10 робочих днів", callback_data: "set_10" }],
           [{ text: "Статус", callback_data: "status" }],
-          [{ text: "Скинути", callback_data: "reset" }]
+          [{ text: "Підтвердити заміну", callback_data: "confirm" }],
+          [{ text: "Журнал замін", callback_data: "history" }]
         ]
       }
     }
   );
 });
 
-// Обробка кнопок
-bot.on("callback_query", (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
+// ===== Buttons =====
+bot.on('callback_query', (q) => {
+  const chatId = q.message.chat.id;
+  const action = q.data;
 
-  if (data.startsWith("set_")) {
-    const days = parseInt(data.split("_")[1]);
+  if (!data.history[chatId]) data.history[chatId] = [];
 
-    reminders[chatId] = {
+  if (action.startsWith('set_')) {
+    const days = parseInt(action.split('_')[1]);
+
+    data.reminders[chatId] = {
       workingDays: days,
       nextReminder: addWorkingDays(days),
       sentToday: false
     };
 
+    saveData();
     bot.sendMessage(chatId, `✅ Нагадування встановлено через ${days} робочі дні о 10:00.`);
   }
 
-  if (data === "status") {
-    if (!reminders[chatId]) {
+  if (action === 'status') {
+    const r = data.reminders[chatId];
+    if (!r) {
       bot.sendMessage(chatId, "⛔ Нагадування не встановлено.");
     } else {
-      const date = new Date(reminders[chatId].nextReminder);
-      bot.sendMessage(chatId, `📅 Наступне нагадування:\n${date.toLocaleString()}`);
+      bot.sendMessage(chatId, `📅 Наступне нагадування:\n${new Date(r.nextReminder).toLocaleString()}`);
     }
   }
 
-  if (data === "reset") {
-    delete reminders[chatId];
-    bot.sendMessage(chatId, "🔄 Нагадування скинуто.");
+  if (action === 'confirm') {
+    const now = new Date().toLocaleString();
+    data.history[chatId].push(now);
+    saveData();
+    bot.sendMessage(chatId, "✅ Заміна фільтра підтверджена та записана в журнал.");
   }
 
-  bot.answerCallbackQuery(query.id);
+  if (action === 'history') {
+    const list = data.history[chatId];
+    if (!list || list.length === 0) {
+      bot.sendMessage(chatId, "📒 Журнал поки пустий.");
+    } else {
+      let text = "📒 Журнал замін:\n\n";
+      list.slice(-20).forEach((d, i) => {
+        text += `${i + 1}. ${d}\n`;
+      });
+      bot.sendMessage(chatId, text);
+    }
+  }
+
+  bot.answerCallbackQuery(q.id);
 });
 
-// Перевірка кожні 30 секунд
+// ===== Reminder loop =====
 setInterval(() => {
   const now = new Date();
 
-  for (let chatId in reminders) {
-    let reminder = reminders[chatId];
+  for (const chatId in data.reminders) {
+    const r = data.reminders[chatId];
 
     if (
-      now.getTime() >= reminder.nextReminder &&
+      now.getTime() >= r.nextReminder &&
       now.getHours() === 10 &&
-      !reminder.sentToday
+      !r.sentToday
     ) {
       bot.sendMessage(
         chatId,
-        "⚠️ Нагадування (10:00):\nЧас замінити фільтр LPG."
+        "⚠️ 10:00 Нагадування:\nЧас замінити фільтр LPG.\nПісля заміни натисніть «Підтвердити заміну»."
       );
 
-      reminder.sentToday = true;
-      reminder.nextReminder = addWorkingDays(reminder.workingDays);
+      r.sentToday = true;
+      r.nextReminder = addWorkingDays(r.workingDays);
+      saveData();
     }
 
     if (now.getHours() >= 11) {
-      reminder.sentToday = false;
+      r.sentToday = false;
     }
   }
-
 }, 30000);
 
-console.log("Bot running with inline buttons...");
+console.log("✅ LPG Service Bot running (Render Free friendly)");
