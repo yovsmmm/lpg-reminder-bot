@@ -5,7 +5,7 @@ const bot = new TelegramBot(token, { polling: true });
 
 let reminders = {};
 
-// Функція додавання робочих днів (Вт–Сб)
+// Додаємо робочі дні (Вт–Сб)
 function addWorkingDays(days) {
   let date = new Date();
   let added = 0;
@@ -19,63 +19,61 @@ function addWorkingDays(days) {
     }
   }
 
-  // Встановлюємо час 10:00
-  date.setHours(10, 0, 0, 0);
+  date.setHours(10, 0, 0, 0); // 10:00
 
   return date.getTime();
 }
 
-// Команда старт
+// Головне меню з кнопками
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    "🤖 Нагадування заміни фільтра LPG\n\n" +
-    "Рахує робочі дні (Вт–Сб)\n" +
-    "Нагадування о 10:00\n\n" +
-    "Команди:\n" +
-    "/set 10 — через 10 робочих днів\n" +
-    "/status — перевірити дату\n" +
-    "/reset — скинути"
+    "🤖 Нагадування заміни фільтра LPG\n\nОберіть інтервал:",
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Через 3 робочі дні", callback_data: "set_3" }],
+          [{ text: "Через 10 робочих днів", callback_data: "set_10" }],
+          [{ text: "Статус", callback_data: "status" }],
+          [{ text: "Скинути", callback_data: "reset" }]
+        ]
+      }
+    }
   );
 });
 
-// Встановити нагадування
-bot.onText(/\/set (\d+)/, (msg, match) => {
-  const chatId = msg.chat.id;
-  const workingDays = parseInt(match[1]);
+// Обробка кнопок
+bot.on("callback_query", (query) => {
+  const chatId = query.message.chat.id;
+  const data = query.data;
 
-  const nextReminder = addWorkingDays(workingDays);
+  if (data.startsWith("set_")) {
+    const days = parseInt(data.split("_")[1]);
 
-  reminders[chatId] = {
-    workingDays: workingDays,
-    nextReminder: nextReminder,
-    sentToday: false
-  };
+    reminders[chatId] = {
+      workingDays: days,
+      nextReminder: addWorkingDays(days),
+      sentToday: false
+    };
 
-  bot.sendMessage(
-    chatId,
-    `✅ Нагадування встановлено через ${workingDays} робочих днів о 10:00.`
-  );
-});
-
-// Статус
-bot.onText(/\/status/, (msg) => {
-  const chatId = msg.chat.id;
-
-  if (!reminders[chatId]) {
-    bot.sendMessage(chatId, "⛔ Нагадування не встановлено.");
-    return;
+    bot.sendMessage(chatId, `✅ Нагадування встановлено через ${days} робочі дні о 10:00.`);
   }
 
-  const date = new Date(reminders[chatId].nextReminder);
-  bot.sendMessage(chatId, `📅 Наступне нагадування:\n${date.toLocaleString()}`);
-});
+  if (data === "status") {
+    if (!reminders[chatId]) {
+      bot.sendMessage(chatId, "⛔ Нагадування не встановлено.");
+    } else {
+      const date = new Date(reminders[chatId].nextReminder);
+      bot.sendMessage(chatId, `📅 Наступне нагадування:\n${date.toLocaleString()}`);
+    }
+  }
 
-// Скинути
-bot.onText(/\/reset/, (msg) => {
-  const chatId = msg.chat.id;
-  delete reminders[chatId];
-  bot.sendMessage(chatId, "🔄 Нагадування скинуто.");
+  if (data === "reset") {
+    delete reminders[chatId];
+    bot.sendMessage(chatId, "🔄 Нагадування скинуто.");
+  }
+
+  bot.answerCallbackQuery(query.id);
 });
 
 // Перевірка кожні 30 секунд
@@ -92,16 +90,13 @@ setInterval(() => {
     ) {
       bot.sendMessage(
         chatId,
-        "⚠️ Нагадування (10:00):\nЧас замінити фільтр LPG.\nПісля заміни введіть /set 10"
+        "⚠️ Нагадування (10:00):\nЧас замінити фільтр LPG."
       );
 
       reminder.sentToday = true;
-
-      // Плануємо наступне нагадування
       reminder.nextReminder = addWorkingDays(reminder.workingDays);
     }
 
-    // Скидаємо прапор після 11:00
     if (now.getHours() >= 11) {
       reminder.sentToday = false;
     }
@@ -109,4 +104,4 @@ setInterval(() => {
 
 }, 30000);
 
-console.log("Bot running with working days logic at 10:00...");
+console.log("Bot running with inline buttons...");
